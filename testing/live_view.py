@@ -3,6 +3,7 @@ import numpy as np
 import cv2
 
 point = None
+last_reported_point = None
 
 
 def on_mouse(event, x, y, flags, param):
@@ -52,10 +53,14 @@ try:
             px, py = point
             distance_m = depth_frame.get_distance(px, py)
 
+            if point != last_reported_point:
+                print(f"Pixel ({px}, {py}) -> {distance_m:.3f} m")
+                last_reported_point = point
+
             cv2.circle(color_image, (px, py), 5, (0, 0, 255), -1)
             cv2.putText(
                 color_image,
-                f"{distance_m:.3f} m",
+                f"({px}, {py})  {distance_m:.3f} m",
                 (px + 10, py - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,

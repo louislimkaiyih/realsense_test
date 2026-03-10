@@ -9,6 +9,18 @@ def build_contour_mask(contour, mask_shape):
     return contour_mask
 
 
+def build_roi_mask(mask_shape, roi_polygon_norm):
+    img_h, img_w = mask_shape
+    roi_polygon_px = np.column_stack((
+        np.round(roi_polygon_norm[:, 0] * img_w),
+        np.round(roi_polygon_norm[:, 1] * img_h),
+    )).astype(np.int32)
+
+    roi_mask = np.zeros(mask_shape, dtype=np.uint8)
+    cv2.fillPoly(roi_mask, [roi_polygon_px], 255)
+    return roi_mask, roi_polygon_px
+
+
 def get_dominant_color(blue_mask, green_mask, yellow_mask, contour, mask_shape):
     contour_mask = build_contour_mask(contour, mask_shape)
 
@@ -601,7 +613,8 @@ locked_target = None
 lost_target_count = 0
 max_lost_frames = 5
 
-near_threshold_m = 0.50
+# Wrist-mounted fixed-pose calibration. Re-measure if the camera pose changes.
+near_threshold_m = 0.47
 combined_close_size = (7, 7)
 foreground_close_size = (9, 9)
 foreground_dilate_size = (3, 3)
@@ -612,6 +625,14 @@ max_aspect_ratio = 5.5
 min_fill_ratio = 0.45
 margin = 8
 depth_window_size = 5
+
+use_fixed_roi = True
+roi_polygon_norm = np.array([
+    [0.12, 0.06],
+    [0.84, 0.06],
+    [0.84, 0.94],
+    [0.12, 0.94],
+], dtype=np.float32)
 
 merge_angle_diff_deg = 20.0
 merge_depth_diff_m = 0.03
@@ -652,13 +673,19 @@ try:
         color_image = np.asanyarray(color_frame.get_data())
         hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
 
+        if use_fixed_roi:
+            roi_mask, roi_polygon_px = build_roi_mask(depth_image.shape, roi_polygon_norm)
+        else:
+            roi_mask = np.full(depth_image.shape, 255, dtype=np.uint8)
+            roi_polygon_px = None
+
         lower_blue = np.array([95, 90, 60])
         upper_blue = np.array([140, 255, 255])
 
         lower_green = np.array([35, 60, 50])
         upper_green = np.array([85, 255, 255])
 
-        lower_yellow = np.array([20, 120, 120])
+        lower_yellow = np.array([20, 60, 60])
         upper_yellow = np.array([35, 255, 255])
 
         blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
@@ -670,6 +697,7 @@ try:
 
         combined_close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, combined_close_size)
         combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, combined_close_kernel)
+        combined_mask = cv2.bitwise_and(combined_mask, roi_mask)
 
         near_threshold_raw = int(near_threshold_m / depth_scale)
         near_mask = np.where(
@@ -677,6 +705,7 @@ try:
             255,
             0,
         ).astype(np.uint8)
+        near_mask = cv2.bitwise_and(near_mask, roi_mask)
 
         foreground_mask = cv2.bitwise_and(combined_mask, near_mask)
 
@@ -685,6 +714,7 @@ try:
 
         foreground_dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, foreground_dilate_size)
         foreground_mask = cv2.dilate(foreground_mask, foreground_dilate_kernel, iterations=1)
+        foreground_mask = cv2.bitwise_and(foreground_mask, roi_mask)
 
         contours, _ = cv2.findContours(foreground_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -727,6 +757,9 @@ try:
 
             detections.append(detection)
             draw_detection(color_image, detection)
+
+        if roi_polygon_px is not None:
+            cv2.polylines(color_image, [roi_polygon_px], True, (255, 255, 255), 2)
 
         target = None
 
